@@ -1,6 +1,6 @@
 # KarmaSwap — Backend Consolidated Report
 
-**Last updated:** June 2026
+**Last updated:** June 25, 2026
 **Stack:** Spring Boot 3.3.4 + JPA/Hibernate + JdbcTemplate + Spring Security + JWT + WebSocket/STOMP + PostgreSQL
 **ddl-auto:** `update` — Hibernate auto-creates/alters columns on startup. No manual migrations needed for entity changes.
 
@@ -32,7 +32,7 @@ Never use `WHEN ? IS NOT NULL` in SQL. Handle null checks in Java and build diff
 **Rule 3 — Two Item Mapping Methods**
 - `mapItemRow(ResultSet rs)` — JdbcTemplate, returns full enriched response including `ownerLocation`, `isFollowing`, full image URL. Use for all marketplace and item detail queries.
 - `mapToResponse(Item item)` — JPA, simpler, no `isFollowing` context. Use only for the user's own item list.
-- `itemMapper.toItemResponse()` — **scheduled for removal. Do not add new calls.**
+- `itemMapper.toItemResponse()` — **removed from the codebase.** The last call site (`updateItem()`) now routes through `ItemService.updateItem()`.
 
 **Rule 4 — Two `ProfileService.mapToDTO()` Overloads**
 - `mapToDTO(Profile profile)` — `isFollowing` defaults to false. Use for logged-in user's own profile.
@@ -147,11 +147,16 @@ userRepository.findByEmail(principal.getName()).getId()
 - `ITEM_CLAIMED` activity log wired into `claimItem()`
 - `DELISTED` added to `ItemStatus`
 - `delistItem()` added to `ItemService`
+- **Hardcoded `localhost` image URLs removed** — `ItemServiceImpl` had `BASE_IMAGE_URL = "http://localhost:8080/uploads/"` as a static constant; moved to `application.yml` as `app.base-url`, injected via `@Value("${app.base-url}")`. Deploying now only requires changing one config line, and every image URL across the app updates automatically.
+- Fixed a malformed-URL bug introduced during the base URL refactor — some occurrences were written as `baseUrl + imageUrl`, missing the `/uploads/` segment (produced URLs like `http://localhost:8080avatar-123.jpg`). Corrected across `mapItemRow()`, `mapToResponse()`, and `mapToDTO()`.
+- **`itemMapper.toItemResponse()` — fully removed from the codebase.** The one remaining call site (`ItemController.updateItem()`) was replaced by routing through the newly-built `ItemService.updateItem()`.
+- **`ItemService.updateItem()` — built.** Handles ownership check (403 if not owner), partial field updates (all fields optional), image replacement with old file deletion, activity log write. Controller delegates cleanly, no business logic left in the controller.
 
 **Design decisions:**
 - `mapItemRow()` is the canonical mapper for marketplace and item detail
 - `mapToResponse()` only for user's own item list
 - Marketplace order intentionally varies slightly per load (randomness factor) — not a bug
+- Base URL extracted to config, not hardcoded — `app.base-url` in `application.yml` is the single source of truth for the server URL used in image paths. No `localhost` strings remain hardcoded in service logic.
 
 ---
 
@@ -163,10 +168,20 @@ userRepository.findByEmail(principal.getName()).getId()
 - `mapToDTO()` fully populated — `followerCount`, `followingCount`, `itemsListedCount`, `itemsClaimedCount`, `avatarUrl`, `location`, `trustBadge`
 - `mapToDTO(profile, requestingUserId)` overload added for `isFollowing` on public profile views
 - `GET /profile/{username}` passes requesting user context when authenticated
+- `avatarUrl` now returns a full absolute URL, not just a filename — `mapToDTO()` was setting it directly from the DB value with no base URL prefix; fixed to prepend `baseUrl + "/uploads/"` (matches how `ItemServiceImpl` already handled image URLs)
+- **`PUT /api/profile/me`** — confirmed fully built. Multipart endpoint, accepts `data` (JSON part) + optional `avatar` file
+  - Username uniqueness check, syncs to both `Profile` and `User` entities
+  - `fullName`, `bio`, `location`, `avatarUrl` all updatable
+  - Returns full `ProfileDTO` immediately in the same response — no separate GET needed
+  - Avatar stored via `fileStorageService.storeFile()`, old avatar deleted before new one is saved
+- Duplicate `updateProfile(UUID userId, Profile updatedProfile)` method removed — old dead code that only updated username/bio and returned a raw `Profile` instead of `ProfileDTO`
 
 **Design decisions:**
 - `followerCount`/`followingCount` always live-queried, never stored/cached on `Profile`
 - Trust badge tier computed on the fly via `getTrustBadge()` from numeric `trustScore` — never stored as a separate field (avoids drift risk)
+- Two `mapToDTO()` overloads are intentional and must both stay (Rule 4) — using the wrong one silently returns `isFollowing: false` everywhere
+- Profile update returns the full DTO immediately, including the updated `avatarUrl` as a full absolute URL — no second GET needed after `PUT /api/profile/me`
+- Username change notification to followers deferred — fan-out to potentially hundreds of followers on a single change is disproportionate at this stage; revisit post-launch if users report confusion
 
 ---
 
@@ -459,7 +474,6 @@ All admin routes isolated under `/admin/*`. Role-gated throughout.
 - Search — `GET /api/items/search?q=` matching title and description not built
 - Karma Bounty — entity, 6 endpoints, cron, activity log, all unstarted
 - Karma Expiry — daily cron for 90-day inactivity not built; depends on confirming `last_seen_at` interceptor is sufficient
-- Profile update endpoint — not yet investigated
 - `GET /admin/users/{id}/karma-history` — cumulative running balance query not built
 
 ### Trust Score
@@ -471,9 +485,7 @@ All admin routes isolated under `/admin/*`. Role-gated throughout.
 ### On Hold — Do Not Touch Without Lead Engineer
 
 - `setStatuss()` naming on `Escrow` — do not rename
-- `itemMapper.toItemResponse()` — do not add new calls, scheduled for removal
 - Pre-shipment photo — still base64, needs retrofitting to proper file upload (same approach now used for disputes)
-- `avatarUrl` upload — owned by another engineer
 - Fraud Rule 5 (IP-based) — no IP capture
 - Karma refund on admin-triggered cancellation — cron handles it, admin endpoint unconfirmed
 - `GET /admin/activity-log` status — was "in progress by subordinate" per handover; current status unknown

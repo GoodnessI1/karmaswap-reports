@@ -1,6 +1,6 @@
 # KarmaSwap — Frontend Consolidated Report
 
-**Last updated:** June 5, 2026
+**Last updated:** June 25, 2026
 **Stack:** React 18 + Vite + Axios + lucide-react + Plain CSS + React Router DOM v6
 
 ---
@@ -307,14 +307,90 @@ All routes live in `App.jsx` inside `AppContent`. Admin routes are outside `AppC
 
 ## Dispute Resolution
 
-**`DisputeResolution.jsx`** — rebuilt
-- Reads `escrowId` from route params (`/dispute/:escrowId`) instead of prop state
-- Real API call to `POST /api/disputes/{escrowId}` with `reason`, `description`, `evidenceImages` (base64, up to 3 images)
+**`DisputeResolution.jsx`** — fully rebuilt and confirmed working end-to-end
+- Reads `escrowId` from route params (`/dispute/:escrowId`) instead of prop state — self-contained, no `App.jsx` state dependency
+- Real API call to `POST /api/disputes/{escrowId}` with `reason`, `description`, `evidenceImages` (base64 array, up to 3 images)
 - Video evidence removed — backend only accepts images
-- Human-readable issue types mapped to backend enum values (`ITEM_NOT_RECEIVED` etc.)
-- Success state UI after submission
-- Both buyer and seller get "Report a Problem" access during `DISPATCHED`/`DELIVERED`
-- Backend dispute endpoint built — contract match not yet confirmed
+- Human-readable issue types mapped to backend enum values: `ITEM_NOT_RECEIVED`, `ITEM_NOT_AS_DESCRIBED`, `SELLER_UNRESPONSIVE`, `OTHER`
+- Success state UI after submission with "Back to My Trades" navigation
+- Back button uses `navigate(-1)` instead of a hardcoded route
+- `App.jsx` route updated from `/dispute` to `/dispute/:escrowId`
+- Both buyer and seller get "Report a Problem" access during `DISPATCHED`/`DELIVERED` (initially scoped buyer-only per brief, reversed per explicit instruction)
+- Fixed `navigate is not defined` error — `useNavigate()` added inside `ActionPanel` sub-component independently
+- **Confirmed: backend dispute endpoint matches frontend spec exactly — no reconciliation needed**
+
+**Dispute Frozen State**
+- Backend confirmed escrow objects include `disputeStatus: null | "PENDING" | "RESOLVED"`
+- `isDisputed` flag added in `TradeCard.jsx` (in main component body, not inside a hook — fixed a scoping error)
+- `TradeCard` — CTA label shows "Dispute in Review", CTA disabled when `isDisputed`
+- `TradeCard` — ⚖️ "Dispute Open" badge shown alongside existing status badge
+- `TradeDetail` `ActionPanel` — shows a frozen panel ("Dispute in Review" + moderator message) when `isDisputed`, blocking all action buttons
+- `.trade-status-badge.status-disputed` CSS added
+
+---
+
+## Profile
+
+**`Profile.jsx`** — complete rewrite, new layout and class names throughout
+- New header: avatar (real image support + `avatarUrl` normalization), username, fullName, location with `MapPin` lucide icon, bio, truncated account ID (first8...last4)
+- Account ID truncated in display, full value preserved in `title` attribute and copy function
+- Transfer Karma button moved into the name row alongside Edit Profile — no separate actions row
+- Stats grid expanded from 3 to 6 cards: Available Karma (primary), Total Earned, Total Spent, Trust Score, Listed, Claimed
+  - Grid: 6 columns desktop → 3 tablet → 2 mobile
+  - Available Karma card gets `1.4fr` width vs `1fr` for others, to visually anchor the row
+- Avatar ring — white border + primary color outer ring for depth
+- Avatar distortion fixed — `object-fit: cover`, `object-position: center`, `overflow: hidden` on wrapper, `onError` fallback to placeholder if image fails to load
+- Activity tab redesigned — earned/spent icon circles (↑/↓) with proper karma coloring
+- Empty states use the `.trades-empty` pattern, consistent with the rest of the app
+- Fixed duplicate username + buttons rendering — two `.profile-header-name-row` blocks existed, stale one removed
+
+**`EditProfileModal.jsx`** — built inside `Profile.jsx`
+- Fields: username, fullName, bio, location (3-part), avatar upload
+- Avatar upload is click-on-avatar UX (not a separate file input button), with a camera emoji overlay on hover
+- Location pre-populated by parsing existing `profile.location` string via `parseLocation`
+- State dropdown → city dropdown (populated dynamically) → area free text
+- Submits as `multipart/form-data` — data part as JSON string, avatar part as file (omitted if unchanged)
+- Manual `Content-Type` header removed — Axios sets it automatically with the correct boundary
+- Handles 409 Conflict (username taken) with a specific error message
+- On save: updates local profile state immediately + calls `refreshProfile()` to sync navbar karma/avatar
+
+---
+
+## Location
+
+**`src/utils/nigeriaLocations.js`** — shared utility
+- `NIGERIA_STATES`, `buildLocation`, `parseLocation` extracted here
+- Hardcoded list used instead of a `GET /api/locations` endpoint — avoids a network call for static dropdown data
+- Both `Profile.jsx` and `Auth.jsx` import from this shared utility — no duplication
+
+**Registration form (`Auth.jsx`)**
+- Single free-text location input replaced with 3-part location: state dropdown → city dropdown (dynamic) → area text (optional)
+- `locState`, `locCity`, `locArea`, `locCities` state added alongside existing form state
+- `clearForm` and `switchToLoginWithEmail` both reset all location fields
+- Validation checks `locState` and `locCity` specifically, rather than the old `trimmedLocation`
+- `buildLocation` concatenates the parts before passing to `signUp`
+- `.auth-location-select` and `.auth-location-area` CSS added, matching auth form style
+
+---
+
+## Daily Rewards
+
+**`DailyRewards.jsx`** — full revamp, new `dr-*` CSS classes
+- Lucide icons per reward type: `Zap` (daily), `Star` (weekly), `Gift` (monthly)
+- Streak badge redesigned — dark green pill with flame icon
+- Weekly progress bar + streak dots row (7 pill-shaped dots, filled green for completed days, current day highlighted with a ring)
+- Reward cards: icon, eyebrow, large reward amount, title, description, claim button with spinner
+- Available cards get green border + light green background; claimed cards muted at 0.7 opacity
+- **Key fix — eliminated visible page refresh on claim:** local state updates optimistically immediately, `loadStatus` re-fetches in background silently, `onRewardsUpdated` changed to only call `refreshProfile()` (not `fetchUserData()`) so items/claimed/transactions don't re-fetch on every claim
+- Success message inline with `CheckCircle` icon, styled green
+- Loading spinner via CSS animation, no external dependency
+- Fully responsive — single column mobile, 3 columns desktop
+
+---
+
+## Referral — Scoped to Backlog
+
+No referral UI exists yet. The `?ref=` param is read silently on registration and passed to the backend — no UI for generating/sharing referral links or tracking referrals. Added to backlog as a future Profile page feature ("Refer a Friend" section with a unique link).
 
 ---
 
@@ -440,7 +516,6 @@ Escrow updates: `/user/queue/updates`
 - TradeDetail end-to-end with two real users — seller dispatch → buyer confirm → acknowledge
 - WebSocket chat live testing
 - Pre-shipment photo — confirm backend accepts pure base64 (prefix stripped on frontend)
-- Dispute flow — backend contract match not yet confirmed
 
 ### Pending Backend
 - `TRADE_CANCELLED` activity type not yet sent by backend on cancellation (frontend `FeedCard.jsx` is ready)
@@ -463,6 +538,4 @@ Escrow updates: `/user/queue/updates`
 
 ### Tier 4 — Big Builds, Unscoped
 - Bounties feature (full MVP push item)
-- Profile UI revamp + edit profile UI
-- Location → 2 dropdowns + 1 text field
 - `/checkout` adjustments — awaiting detail on what's needed
